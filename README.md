@@ -1,90 +1,54 @@
-# School D’Or: Lunchtime Football Awards
+# School D’Or v2: Ceremony Edition
 
-A dark, gold-themed voting site with an admin panel. It runs on Cloudflare's free tier, so it **stays online all the time** (no "goes to sleep when nobody visits" like Render's free plan).
+A dark, gold-themed awards site that runs on Cloudflare (free tier, always on). Visitors vote through a cinematic ceremony: each award gets its own animation, voiceover and sound, then a vote with a confirm step, then **Next**.
 
 ```
-public/index.html        the website
-public/ball.jpg          the golden trophy image
-functions/api/[[path]].js  the backend (votes, admin, photos)
-schema.sql               sets up the database (and adds the starter players/awards)
+public/index.html, admin/index.html   the website and the /admin sign-in page
+public/style.css, app.js              look and behaviour
+public/audio.js                       sound effects + built-in score (made in code) + voice/music mixing
+public/scenes.js                      the 8 award animations
+public/ball.jpg                       the trophy image
+functions/api/[[path]].js             the backend (votes, write-ins, admin, photos, audio)
+schema.sql                            full database setup (new installs)
+migration-v2.sql                      adds the NEW tables to an existing database
 ```
 
-## What you need
-- A free GitHub account: https://github.com
-- A free Cloudflare account: https://dash.cloudflare.com/sign-up (no card needed for what we use)
+## Updating your existing site (about 5 minutes)
 
----
+**1. Upload to GitHub.** Open your `school-dor` repo → **Add file → Upload files**. Unzip this package and drag in everything (keep the folders). Commit. Cloudflare redeploys by itself.
 
-## Part 1: Put the code on GitHub
+**2. Add the new tables.** Cloudflare → **Storage & Databases → D1 → your database → Console**. Paste all of `migration-v2.sql` and press **Execute**.
+- It only **adds four new tables** (`award_meta`, `audio`, `writeins`, `aliases`). Your players, awards, photos and votes are not touched.
+- It is safe to run more than once.
+- Until you run it, the old features keep working, but voice, music, write-in awards and award ordering cannot be saved.
 
-1. Unzip `school-dor-site.zip` on your computer. You will see `public`, `functions`, `schema.sql` and `README.md`.
-2. On GitHub, click **+** (top right) → **New repository**. Name it `school-dor`, leave it **Public** or choose **Private** (both work), and click **Create repository**.
-3. On the new repo page click **uploading an existing file**.
-4. Open the unzipped folder and **drag everything inside it** (the `public` and `functions` folders plus the two files) into the browser. Wait for the upload to finish.
-5. Scroll down and click **Commit changes**.
+**3. Refresh.** Open your site and do a hard refresh (Ctrl+Shift+R, or close and reopen the tab on a phone).
 
-Check that you can see `public`, `functions`, `schema.sql` in your repo.
+Fresh install? Follow the old steps but paste `schema.sql` (it already includes the new tables).
 
-## Part 2: Put it live on Cloudflare Pages
+## Setting up the ceremony (in Admin: `/admin`)
 
-1. In Cloudflare go to **Workers & Pages** → **Create** → **Pages** → **Connect to Git**.
-2. Connect your GitHub account and pick the `school-dor` repo → **Begin setup**.
-3. Settings:
-   - Framework preset: **None**
-   - Build command: *leave empty*
-   - Build output directory: **public**
-4. Click **Save and Deploy**. When it finishes you get a link like `https://school-dor.pages.dev`. It will not fully work yet. Do Part 3 and 4 next.
+1. **Order:** Awards play from the top of the list down, so put the least important first and the biggest last (School D’Or second to last, People’s Choice last). Use the ▲ ▼ buttons.
+2. **People’s Choice (typed names):** Add an award, then set **Type: Write-in**. Voters type a name instead of picking. Only you can see the counts, shown under that award as *Live name counts*.
+   - Names are matched ignoring capitals, spaces and accents, and close spellings are merged (“romit”, “Romitt”, “Romit Sharma” → Romit). Names that match a player are tied to that player.
+   - It cannot be perfect (nicknames, similar names), so you can **Merge** two entries or **Hide** a rude one. Hidden entries can be brought back.
+3. **Animation:** each award has an *Animation* style (Auto picks one from the award name) and a *Length* in seconds (12 to 45). Use **▶ Preview animation** to watch it.
+4. **Award picture:** upload your ChatGPT image. It is shown in full with no text on top, so the text already in your image is never covered.
+5. **Voiceover:** open **📝 Recording sheet for your friend**. It lists every line, the tone, the time it comes in and how long each clip should be. Print it or save as PDF. He records one clip per line (phone voice memo is fine), then you press **Upload recording** on the matching award. Lines can be edited in the text box first.
+6. **Music (optional):** upload a track per award, or leave it empty and the built-in cinematic score plays. Fill in the title, artist and link, and they appear automatically as “Music:” credits in the site footer.
+7. **Opening movie and thank-you:** the *Opening & thank-you* section controls the “▶ Watch the story” animation and the screen after the last award.
 
-## Part 3: Create the database
+## Good to know
 
-1. In Cloudflare go to **Storage & Databases** → **D1 SQL Database** → **Create database**. Name it `school-dor-db`.
-2. Open the database → **Console** tab.
-3. Open `schema.sql` from your unzipped folder, copy **all** of it, paste into the console, and click **Execute**.
-
-## Part 4: Connect the database and set your admin password
-
-1. Go to **Workers & Pages** → your `school-dor` project → **Settings**.
-2. **Bindings** → **Add** → **D1 database**:
-   - Variable name: `DB` (exactly, capital letters)
-   - Database: `school-dor-db`
-   - Save.
-3. **Variables and Secrets** → **Add**:
-   - Variable name: `ADMIN_PASSWORD`
-   - Value: a strong password only you know (type: Secret)
-   - Save.
-4. Go to **Deployments** → on the latest one click **⋯** → **Retry deployment**, so the new settings take effect.
-
-## Part 5: Use it
-
-1. Open your `.pages.dev` link. The intro plays, then the site loads.
-2. Click **Login** (top right) and enter your `ADMIN_PASSWORD`. An **Admin** tab appears.
-3. In **Admin** you can:
-   - add, rename and delete awards, choose an icon and upload an award picture
-   - add players, edit position/goals/assists/rating and upload their photos
-   - choose which players are nominated in each award
-   - set a voting deadline (with live countdown), reveal results, and set an optional **voting code**
-4. Share the link with your group. Nobody needs an account to vote.
-
-To let another person be an admin, give them the admin password. To remove their access, change `ADMIN_PASSWORD` in Cloudflare and retry the deployment.
-
-### Custom address (optional)
-Project → **Custom domains** → **Set up a custom domain** (you need to own a domain).
-
-### Updating the site later
-Edit a file on GitHub (pencil icon) and commit. Cloudflare redeploys automatically within a minute.
-
----
-
-## How the anti-spam works
-- **One ballot per device.** The first time someone votes, their browser gets a private device ID. Each device gets one vote per award. They can change their pick until voting closes, but they cannot add extra votes.
-- **Rate limit.** One internet connection can only send a limited number of votes per minute, which stops scripts.
-- **Optional voting code.** In Admin set a code (for example one you announce at school). Only people who know it can vote. This is the strongest protection.
-- **Honest limit:** a determined person could clear their browser data or use a private window to get a fresh device ID. The voting code is the fix for that. You can also check the voter count in Admin against how many people you expect.
-
-## Free plan limits
-Cloudflare's free plan allows plenty for a school site, but limits can change, so check their pricing page if usage grows. Open pages refresh their data every 15 seconds, and only while the tab is visible.
+- **File size:** each audio upload can be up to about 1.3 MB (roughly 80 seconds of ordinary MP3). Voice clips of 15 to 20 seconds are tiny. For music, trim to 30 to 60 seconds. It loops.
+- **Sound starts after a tap** (browsers block automatic sound). Voters can mute with the 🔊 button. A phone on silent may mute web sound.
+- **No recording yet?** That animation plays with sound effects, music and on-screen captions. You can also turn on **Browser voice** in Admin, though it sounds robotic and differs per device.
+- **Reduced motion:** visitors with that accessibility setting skip the animations and go straight to voting.
+- **Music licences:** only use music you have permission to use, and add the credit if the licence asks. Avoid famous songs and football anthems.
+- **Votes:** one ballot per device per award. Voters confirm before locking in, and can change their pick until voting closes. The optional voting code and per-connection rate limit still apply.
+- **Admin:** only at `/admin`, protected by `ADMIN_PASSWORD` on the server. There is a small “Admin” button in the menu that leads there, but hiding it is not the protection; the password is.
 
 ## Troubleshooting
-- **Site loads but shows no awards:** the database is not connected. Re-check Part 3 (ran `schema.sql`) and Part 4 (binding named exactly `DB`), then retry the deployment.
-- **Login says wrong password:** check `ADMIN_PASSWORD` has no extra spaces, and retry the deployment after changing it.
-- **Photo upload fails:** use a normal JPG/PNG photo. Very large images are shrunk automatically, but the upload limit is about 1 MB after shrinking.
+- **Saving voice, music or award type fails:** run `migration-v2.sql` (step 2).
+- **Upload says “too big”:** trim or lower the quality of the audio.
+- **Looks unchanged after the update:** hard refresh; check the latest deployment finished in Cloudflare.
