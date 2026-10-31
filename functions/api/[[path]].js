@@ -6,7 +6,9 @@ const J = (d, s = 200, h = {}) =>
 const TABLES = {
   players: ['name', 'position', 'goals', 'assists', 'rating', 'photo'],
   awards: ['title', 'icon', 'photo', 'nominees'],
+  beats: ['item', 'text', 'fx', 'start', 'vstart', 'audio', 'trim_in', 'trim_out', 'speed', 'gain'],
 };
+const NUM_COLS = ['start', 'vstart', 'trim_in', 'trim_out', 'speed', 'gain'];
 const META_COLS = ['kind', 'style', 'script', 'tone', 'duration', 'voice', 'voice_at', 'music', 'music_title', 'music_credit', 'music_link'];
 
 const cookie = (req, n) => {
@@ -206,9 +208,10 @@ export async function onRequest({ request: req, env, params }) {
           if (s.revealed === '1' && g.groups[0]) winnerW[a.id] = g.groups[0].label;
         }
       }
+      const beats = await safeAll(env, 'SELECT * FROM beats ORDER BY start');
       const dev = cookie(req, 'sd_dev');
       return J({
-        players, awards, tally, voters, admin, writeins, winnerW,
+        players, awards, beats, tally, voters, admin, writeins, winnerW,
         special: { intro: M._intro || null, outro: M._outro || null },
         mine: await myVotes(env, dev), mineW: await myWriteins(env, dev),
         set: { revealed: s.revealed === '1', deadline: +s.deadline || 0, codeRequired: !!s.code, tts: s.tts === '1' },
@@ -314,14 +317,21 @@ export async function onRequest({ request: req, env, params }) {
       }
 
       if (sub === 'reset-votes' && m === 'POST') {
-        await env.DB.prepare('DELETE FROM votes').run();
-        try { await env.DB.prepare('DELETE FROM writeins').run(); } catch (e) {}
+        let b = {};
+        try { b = await req.json(); } catch (e) {}
+        if (b.award) {
+          await env.DB.prepare('DELETE FROM votes WHERE award_id = ?').bind(String(b.award)).run();
+          try { await env.DB.prepare('DELETE FROM writeins WHERE award_id = ?').bind(String(b.award)).run(); } catch (e) {}
+        } else {
+          await env.DB.prepare('DELETE FROM votes').run();
+          try { await env.DB.prepare('DELETE FROM writeins').run(); } catch (e) {}
+        }
         return J({ ok: true });
       }
 
       const cols = TABLES[sub];
       if (!cols) return J({ error: 'Not found' }, 404);
-      const val = (c, v) => (c === 'nominees' ? JSON.stringify(Array.isArray(v) ? v : []) : v);
+      const val = (c, v) => (c === 'nominees' ? JSON.stringify(Array.isArray(v) ? v : []) : NUM_COLS.includes(c) ? (v === null || v === undefined ? null : Number(v) || 0) : v);
 
       if (m === 'POST') {
         const b = await req.json();
@@ -341,11 +351,12 @@ export async function onRequest({ request: req, env, params }) {
       }
       if (m === 'DELETE' && id) {
         await env.DB.prepare(`DELETE FROM ${sub} WHERE id = ?`).bind(id).run();
-        await env.DB.prepare(`DELETE FROM votes WHERE ${sub === 'players' ? 'player_id' : 'award_id'} = ?`).bind(id).run();
+        if (sub === 'players' || sub === 'awards') await env.DB.prepare(`DELETE FROM votes WHERE ${sub === 'players' ? 'player_id' : 'award_id'} = ?`).bind(id).run();
         if (sub === 'awards') {
           for (const t of ['award_meta', 'writeins', 'aliases']) {
             try { await env.DB.prepare(`DELETE FROM ${t} WHERE award_id = ?`).bind(id).run(); } catch (e) {}
           }
+          try { await env.DB.prepare('DELETE FROM beats WHERE item = ?').bind(id).run(); } catch (e) {}
         }
         return J({ ok: true });
       }

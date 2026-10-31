@@ -1,54 +1,61 @@
-# School D’Or v2: Ceremony Edition
+# School D’Or v3: the Ceremony
 
-A dark, gold-themed awards site that runs on Cloudflare (free tier, always on). Visitors vote through a cinematic ceremony: each award gets its own animation, voiceover and sound, then a vote with a confirm step, then **Next**.
+Voters go through a cinematic ceremony: every time, the School D’Or story plays first. Each award then opens with dramatic animated text, sound effects, music and your friend’s voice, the trophy appears, the nominees arrive one by one with their stats, and then they vote. A locked vote moves straight on to the next award.
 
 ```
-public/index.html, admin/index.html   the website and the /admin sign-in page
-public/style.css, app.js              look and behaviour
-public/audio.js                       sound effects + built-in score (made in code) + voice/music mixing
-public/scenes.js                      the 8 award animations
+public/index.html, admin/index.html   the website and the /admin page
+public/style.css, app.js              look and behaviour (voters)
+public/admin.js                       the admin dashboard and voice studio
+public/audio.js                       sound effects, built-in score, voice mixing and recording
+public/scenes.js                      the text animations, trophy reveal and nominee reveal
 public/ball.jpg                       the trophy image
-functions/api/[[path]].js             the backend (votes, write-ins, admin, photos, audio)
-schema.sql                            full database setup (new installs)
-migration-v2.sql                      adds the NEW tables to an existing database
+functions/api/[[path]].js             the backend
+schema.sql                            full database setup (new installs only)
+migration-v3.sql                      run this once on your existing database
 ```
 
-## Updating your existing site (about 5 minutes)
+## Updating (about 10 minutes)
 
-**1. Upload to GitHub.** Open your `school-dor` repo → **Add file → Upload files**. Unzip this package and drag in everything (keep the folders). Commit. Cloudflare redeploys by itself.
+1. **Database first.** Cloudflare → Storage & Databases → D1 → your database → **Console**. Paste all of `migration-v3.sql` and press **Execute**. It only **adds new tables**. Your players, awards, photos and votes are untouched. Safe to run again.
+2. **GitHub.** Upload the files, keeping the same folders. Files that exist are replaced.
+   - `public/`: `index.html`, `style.css`, `app.js`, `audio.js`, `scenes.js`, and the new **`admin.js`**
+   - `public/admin/`: `index.html`
+   - `functions/api/`: `[[path]].js`
+3. Wait a minute for Cloudflare to redeploy, then hard refresh.
 
-**2. Add the new tables.** Cloudflare → **Storage & Databases → D1 → your database → Console**. Paste all of `migration-v2.sql` and press **Execute**.
-- It only **adds four new tables** (`award_meta`, `audio`, `writeins`, `aliases`). Your players, awards, photos and votes are not touched.
-- It is safe to run more than once.
-- Until you run it, the old features keep working, but voice, music, write-in awards and award ordering cannot be saved.
+## What voters see
+- **Awards page:** a secret until the ceremony (no names, no count). After you reveal results it shows the winners.
+- **Voting:** one button, **Start voting** (or **Continue voting** if they already voted). No award list, count or menu. The only way out is **Leave**.
+- **Every time** (even after a refresh): the School D’Or story first, then the awards in your order. “Continue voting” skips straight to their first unvoted award after the story.
+- Each vote asks **“Lock in your vote?”**. After confirming it moves to the next award automatically. At the end they see a summary where they can change any vote until voting closes.
+- Skip buttons stay inside the animations, so people can skip a voice-over or the nominees.
 
-**3. Refresh.** Open your site and do a hard refresh (Ctrl+Shift+R, or close and reopen the tab on a phone).
+## Admin (`/admin`), five tabs
+- **Ceremony:** the show order with ▲ ▼. Preview any part or the whole ceremony.
+- **Awards:** add awards, pictures, nominees, **Reset votes** for one award. To make a typed-name trophy, set its Type to **Write-in**. The smart name matching (capitals, spelling, merging) is in the Voting tab.
+- **Voice studio:** pick an item (Opening, an award, Thank-you). See below.
+- **Players:** names, stats, photos.
+- **Voting:** reveal results, deadline, voting code, live results, **Reset ALL votes**.
 
-Fresh install? Follow the old steps but paste `schema.sql` (it already includes the new tables).
-
-## Setting up the ceremony (in Admin: `/admin`)
-
-1. **Order:** Awards play from the top of the list down, so put the least important first and the biggest last (School D’Or second to last, People’s Choice last). Use the ▲ ▼ buttons.
-2. **People’s Choice (typed names):** Add an award, then set **Type: Write-in**. Voters type a name instead of picking. Only you can see the counts, shown under that award as *Live name counts*.
-   - Names are matched ignoring capitals, spaces and accents, and close spellings are merged (“romit”, “Romitt”, “Romit Sharma” → Romit). Names that match a player are tied to that player.
-   - It cannot be perfect (nicknames, similar names), so you can **Merge** two entries or **Hide** a rude one. Hidden entries can be brought back.
-3. **Animation:** each award has an *Animation* style (Auto picks one from the award name) and a *Length* in seconds (12 to 45). Use **▶ Preview animation** to watch it.
-4. **Award picture:** upload your ChatGPT image. It is shown in full with no text on top, so the text already in your image is never covered.
-5. **Voiceover:** open **📝 Recording sheet for your friend**. It lists every line, the tone, the time it comes in and how long each clip should be. Print it or save as PDF. He records one clip per line (phone voice memo is fine), then you press **Upload recording** on the matching award. Lines can be edited in the text box first.
-6. **Music (optional):** upload a track per award, or leave it empty and the built-in cinematic score plays. Fill in the title, artist and link, and they appear automatically as “Music:” credits in the site footer.
-7. **Opening movie and thank-you:** the *Opening & thank-you* section controls the “▶ Watch the story” animation and the screen after the last award.
+## Voice studio (your friend’s voiceover)
+Every item is a list of **lines**. Each line has its text, an animation style, the time it appears, and optionally a voice clip.
+1. Open **Voice studio**, choose an item, tap **Customise this timeline** (this creates editable lines from the built-in wording). Edit the wording as you like.
+2. **Record:** press **🎙 Record** on a line (or **Record all lines** to be guided through every line one after another). The line is shown big on screen to read. You can listen, keep or try again. Silence at the start and end is trimmed automatically. You can do a few lines now and the rest later.
+   - Or **Upload file** if he recorded in another app.
+3. **Place it:** drag the blue/green blocks on the timeline, or type the “Voice starts at” time. The voice can start at a different time than its text.
+4. **Trim and speed:** drag the gold handles on the waveform to cut the clip. Choose a speed (0.8× to 1.4×). Speeding up also raises the pitch a little, so small changes sound best. Volume has four settings.
+5. **Preview** plays the real thing. The trophy appears after the last line and voice clip finish.
+6. **Recording sheet** prints a list of every line for him to read.
+The recorder needs microphone permission (allowed on your https site). If someone else records on their phone, they need the admin password, or they can send files for you to upload.
 
 ## Good to know
-
-- **File size:** each audio upload can be up to about 1.3 MB (roughly 80 seconds of ordinary MP3). Voice clips of 15 to 20 seconds are tiny. For music, trim to 30 to 60 seconds. It loops.
-- **Sound starts after a tap** (browsers block automatic sound). Voters can mute with the 🔊 button. A phone on silent may mute web sound.
-- **No recording yet?** That animation plays with sound effects, music and on-screen captions. You can also turn on **Browser voice** in Admin, though it sounds robotic and differs per device.
-- **Reduced motion:** visitors with that accessibility setting skip the animations and go straight to voting.
-- **Music licences:** only use music you have permission to use, and add the credit if the licence asks. Avoid famous songs and football anthems.
-- **Votes:** one ballot per device per award. Voters confirm before locking in, and can change their pick until voting closes. The optional voting code and per-connection rate limit still apply.
-- **Admin:** only at `/admin`, protected by `ADMIN_PASSWORD` on the server. There is a small “Admin” button in the menu that leads there, but hiding it is not the protection; the password is.
+- Default timing: each award intro is about 15 seconds and the nominee reveal about 12 seconds. The opening story is about 21 seconds. Both depend on how many lines and nominees you have.
+- Sound starts after a tap (browser rule), has a mute button, and a phone on silent may mute it. Visitors with “reduce motion” turned on skip the animations.
+- Voice clips are stored as small WAV files (a 15 second clip is about 700 KB). Each upload is limited to about 1.3 MB. Music uploads are limited the same way, so trim tracks to 30 to 60 seconds. Only use music you have permission to use.
+- The awards are hidden from the screen, but a technical person can still find them in the site’s data. It is a surprise, not a security feature.
+- Votes: one ballot per device per award. The voting code and rate limit still apply.
 
 ## Troubleshooting
-- **Saving voice, music or award type fails:** run `migration-v2.sql` (step 2).
-- **Upload says “too big”:** trim or lower the quality of the audio.
-- **Looks unchanged after the update:** hard refresh; check the latest deployment finished in Cloudflare.
+- Can’t save lines, voice or award type: run `migration-v3.sql` (step 1).
+- No sound: tap the page first, check the 🔊 button and the phone’s silent switch.
+- Looks unchanged: hard refresh and make sure `admin.js` was uploaded.

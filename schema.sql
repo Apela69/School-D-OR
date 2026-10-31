@@ -20,6 +20,5 @@ CREATE TABLE IF NOT EXISTS award_meta (award_id TEXT PRIMARY KEY, kind TEXT DEFA
 CREATE TABLE IF NOT EXISTS audio (id TEXT PRIMARY KEY, data TEXT, type TEXT);
 CREATE TABLE IF NOT EXISTS writeins (device TEXT, award_id TEXT, raw TEXT, norm TEXT, t INTEGER, PRIMARY KEY (device, award_id));
 CREATE TABLE IF NOT EXISTS aliases (award_id TEXT, norm TEXT, label TEXT, PRIMARY KEY (award_id, norm));
-INSERT OR IGNORE INTO award_meta (award_id, kind, script, tone, duration) VALUES
- ('_intro', 'special', 'Every lunchtime, somewhere on this pitch, a legend is born. Tonight, we celebrate them. This is the School D’Or.', 'Slow, deep, cinematic. Pause after "legend is born".', 26),
- ('_outro', 'special', 'Your votes are in. The legends will be revealed. Thank you for being part of the School D’Or.', 'Warm and proud. Slow down on the last line.', 14);
+CREATE TABLE IF NOT EXISTS beats (id TEXT PRIMARY KEY, item TEXT, text TEXT, fx TEXT, start REAL DEFAULT 0, vstart REAL, audio TEXT, trim_in REAL DEFAULT 0, trim_out REAL DEFAULT 0, speed REAL DEFAULT 1, gain REAL DEFAULT 1, at INTEGER);
+INSERT OR IGNORE INTO award_meta (award_id, kind, duration) VALUES ('_intro', 'special', 0), ('_outro', 'special', 0);
