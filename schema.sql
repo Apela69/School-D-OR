@@ -22,3 +22,4 @@ CREATE TABLE IF NOT EXISTS writeins (device TEXT, award_id TEXT, raw TEXT, norm 
 CREATE TABLE IF NOT EXISTS aliases (award_id TEXT, norm TEXT, label TEXT, PRIMARY KEY (award_id, norm));
 CREATE TABLE IF NOT EXISTS beats (id TEXT PRIMARY KEY, item TEXT, text TEXT, fx TEXT, start REAL DEFAULT 0, vstart REAL, audio TEXT, trim_in REAL DEFAULT 0, trim_out REAL DEFAULT 0, speed REAL DEFAULT 1, gain REAL DEFAULT 1, at INTEGER);
 INSERT OR IGNORE INTO award_meta (award_id, kind, duration) VALUES ('_intro', 'special', 0), ('_outro', 'special', 0);
+CREATE TABLE IF NOT EXISTS award_video (award_id TEXT PRIMARY KEY, key TEXT NOT NULL, mime TEXT, name TEXT, size INTEGER, duration REAL DEFAULT 0, trim_start REAL DEFAULT 0, trim_end REAL DEFAULT 0, at INTEGER);

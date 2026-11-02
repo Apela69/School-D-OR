@@ -12,6 +12,7 @@ public/ball.jpg                       the trophy image
 functions/api/[[path]].js             the backend
 schema.sql                            full database setup (new installs only)
 migration-v3.sql                      run this once on your existing database
+migration-v4.sql                      run this once to add award videos (needs the R2 bucket, see below)
 ```
 
 ## Updating (about 10 minutes)
@@ -47,6 +48,19 @@ Every item is a list of **lines**. Each line has its text, an animation style, t
 5. **Preview** plays the real thing. The trophy appears after the last line and voice clip finish.
 6. **Recording sheet** prints a list of every line for him to read.
 The recorder needs microphone permission (allowed on your https site). If someone else records on their phone, they need the admin password, or they can send files for you to upload.
+
+## Award videos (v4)
+Each award can have its own intro video (for example from Google Flow). The video plays first, with its own sound, then the nominees start by themselves. Awards without a video keep the animated intro. If a video fails to load or play, the animated School D’Or intro plays instead, so the ceremony never gets stuck.
+
+**One-time setup (videos are too big for the database, so they live in Cloudflare R2):**
+1. Cloudflare dashboard → **R2** → **Create bucket** (any name, for example `school-dor-videos`). R2 has a free allowance (10 GB). Cloudflare may ask you to add a payment method to switch R2 on.
+2. **Workers & Pages** → your project → **Settings** → **Bindings** (older dashboards: Functions) → **Add** → **R2 bucket**. Variable name must be exactly **`VIDEOS`**, bucket = the one you made. Add it for **Production** (and Preview if you use it).
+3. Run **`migration-v4.sql`** in D1 → Console (it only adds one table; safe to run twice).
+4. Upload the new files to GitHub and wait for the redeploy.
+
+**Using it:** Admin → **Awards** → each award has a **🎬 Intro video** box: **Upload video**, **✂ Trim video** (drag the start/end, or type seconds, or use “current frame”), **▶ Play the saved part**, **Replace**, **Remove**. Trimming only saves a start and end time; the video file is never changed. Nothing is saved until you press **Save trim**.
+
+**Video tips:** MP4 with H.264 video and AAC audio plays everywhere. Keep each file under 95 MB (1080p or 720p, 15 to 20 seconds is usually 10 to 40 MB). Phones may need one tap for sound if the browser blocks it, and the ceremony shows a “Tap for sound” button in that case.
 
 ## Good to know
 - Default timing: each award intro is about 15 seconds and the nominee reveal about 12 seconds. The opening story is about 21 seconds. Both depend on how many lines and nominees you have.

@@ -159,6 +159,19 @@ const unb64 = (str) => {
   return u;
 };
 
+/* ---- award intro videos: stored in an R2 bucket bound as VIDEOS (never in D1) ---- */
+const VIDEO_TYPES = { 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov' };
+const MAX_VIDEO = 95000000; // Cloudflare accepts request bodies up to 100 MB on the free plan
+const NO_R2 = { error: 'Video storage isn’t set up yet. Create an R2 bucket and bind it to this project as VIDEOS (see the README), then redeploy.', code: 'no_r2' };
+const parseRange = (h, size) => {
+  const m = /^bytes=(\d*)-(\d*)$/.exec(h || '');
+  if (!m || (m[1] === '' && m[2] === '')) return null;
+  let s, e;
+  if (m[1] === '') { s = Math.max(0, size - +m[2]); e = size - 1; } else { s = +m[1]; e = m[2] === '' ? size - 1 : Math.min(+m[2], size - 1); }
+  return s > e || s >= size ? 'bad' : { offset: s, length: e - s + 1 };
+};
+const finiteNum = (v) => (typeof v === 'number' || (typeof v === 'string' && v.trim() !== '')) && Number.isFinite(+v);
+
 export async function onRequest({ request: req, env, params }) {
   const p = params.path || [];
   const route = p[0];
@@ -174,6 +187,25 @@ export async function onRequest({ request: req, env, params }) {
       const r = await env.DB.prepare('SELECT data, type FROM audio WHERE id = ?').bind(p[1] || '').first();
       if (!r) return new Response('Not found', { status: 404 });
       return new Response(unb64(r.data), { headers: { 'Content-Type': r.type || 'audio/mpeg', 'Cache-Control': 'public, max-age=31536000, immutable' } });
+    }
+
+    if (route === 'video' && m === 'GET') {
+      if (!env.VIDEOS) return new Response('Not found', { status: 404 });
+      if (!/^[A-Za-z0-9_-]{1,40}$/.test(p[1] || '') || !/^[a-f0-9]{16}\.(mp4|webm|mov)$/.test(p[2] || '')) return new Response('Not found', { status: 404 });
+      const key = `videos/${p[1]}/${p[2]}`, head = await env.VIDEOS.head(key);
+      if (!head) return new Response('Not found', { status: 404 });
+      const type = (head.httpMetadata && head.httpMetadata.contentType) || 'video/mp4';
+      const base = { 'Content-Type': type, 'Accept-Ranges': 'bytes', 'Cache-Control': 'public, max-age=31536000, immutable' };
+      const rg = parseRange(req.headers.get('Range'), head.size);
+      if (rg === 'bad') return new Response('Range not satisfiable', { status: 416, headers: { ...base, 'Content-Range': `bytes */${head.size}` } });
+      if (rg) {
+        const o = await env.VIDEOS.get(key, { range: rg });
+        if (!o) return new Response('Not found', { status: 404 });
+        return new Response(o.body, { status: 206, headers: { ...base, 'Content-Length': String(rg.length), 'Content-Range': `bytes ${rg.offset}-${rg.offset + rg.length - 1}/${head.size}` } });
+      }
+      const o = await env.VIDEOS.get(key);
+      if (!o) return new Response('Not found', { status: 404 });
+      return new Response(o.body, { status: 200, headers: { ...base, 'Content-Length': String(head.size) } });
     }
 
     // ---- public state ----
@@ -209,9 +241,11 @@ export async function onRequest({ request: req, env, params }) {
         }
       }
       const beats = await safeAll(env, 'SELECT * FROM beats ORDER BY start');
+      const videos = {};
+      (await safeAll(env, 'SELECT award_id, key, mime, name, size, duration, trim_start, trim_end FROM award_video')).forEach((x) => (videos[x.award_id] = x));
       const dev = cookie(req, 'sd_dev');
       return J({
-        players, awards, beats, tally, voters, admin, writeins, winnerW,
+        players, awards, beats, tally, voters, admin, writeins, winnerW, videos, storage: { video: !!env.VIDEOS },
         special: { intro: M._intro || null, outro: M._outro || null },
         mine: await myVotes(env, dev), mineW: await myWriteins(env, dev),
         set: { revealed: s.revealed === '1', deadline: +s.deadline || 0, codeRequired: !!s.code, tts: s.tts === '1' },
@@ -257,6 +291,46 @@ export async function onRequest({ request: req, env, params }) {
       const id = p[2];
 
       if (sub === 'login') return J({ ok: true });
+
+      if (sub === 'video') {
+        const award = id || '';
+        if (!/^[A-Za-z0-9_-]{1,40}$/.test(award)) return J({ error: 'Unknown award' }, 404);
+        const row = await env.DB.prepare('SELECT * FROM award_video WHERE award_id = ?').bind(award).first().catch(() => null);
+        if (m === 'POST') {
+          if (!env.VIDEOS) return J(NO_R2, 501);
+          if (!(await env.DB.prepare('SELECT id FROM awards WHERE id = ?').bind(award).first())) return J({ error: 'Unknown award' }, 404);
+          const type = (req.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase(), ext = VIDEO_TYPES[type];
+          if (!ext) return J({ error: 'That file type isn’t supported. Use MP4, WebM or MOV.' }, 415);
+          const len = +req.headers.get('Content-Length') || 0;
+          if (!len) return J({ error: 'The upload didn’t say how big it is. Please try again.' }, 411);
+          if (len > MAX_VIDEO) return J({ error: `That video is too big (the limit is ${Math.round(MAX_VIDEO / 1e6)} MB). Export it smaller and try again.` }, 413);
+          const q = new URL(req.url).searchParams, name = String(q.get('name') || 'video').slice(0, 80), dur = finiteNum(q.get('duration')) ? Math.max(0, +q.get('duration')) : 0;
+          const key = `videos/${award}/${[...crypto.getRandomValues(new Uint8Array(8))].map((x) => x.toString(16).padStart(2, '0')).join('')}.${ext}`;
+          const obj = await env.VIDEOS.put(key, req.body, { httpMetadata: { contentType: type } });
+          if (obj.size > MAX_VIDEO) { await env.VIDEOS.delete(key); return J({ error: 'That video is too big. Export it smaller and try again.' }, 413); }
+          try { await env.DB.prepare('INSERT OR REPLACE INTO award_video(award_id, key, mime, name, size, duration, trim_start, trim_end, at) VALUES(?, ?, ?, ?, ?, ?, 0, 0, ?)').bind(award, key, type, name, obj.size, dur, Date.now()).run(); }
+          catch (e) { try { await env.VIDEOS.delete(key); } catch (e2) {} return J({ error: 'Couldn’t save the video. Did you run migration-v4.sql in D1?', code: 'no_table' }, 500); }
+          if (row && row.key && row.key !== key) { try { await env.VIDEOS.delete(row.key); } catch (e) {} }
+          return J({ ok: true, key, size: obj.size });
+        }
+        if (m === 'PUT') {
+          if (!row) return J({ error: 'This award has no video yet.' }, 404);
+          const b = await req.json().catch(() => ({}));
+          if (!finiteNum(b.trim_start) || !finiteNum(b.trim_end)) return J({ error: 'Start and end must be numbers.' }, 400);
+          const a = +b.trim_start, z = +b.trim_end;
+          if (a === 0 && z === 0) { await env.DB.prepare('UPDATE award_video SET trim_start = 0, trim_end = 0 WHERE award_id = ?').bind(award).run(); return J({ ok: true }); }
+          if (a < 0 || z <= a) return J({ error: 'The end must come after the start.' }, 400);
+          if (z - a < 0.5) return J({ error: 'Keep at least half a second of video.' }, 400);
+          if (row.duration > 0 && z > row.duration + 0.25) return J({ error: 'The end is past the end of the video.' }, 400);
+          await env.DB.prepare('UPDATE award_video SET trim_start = ?, trim_end = ? WHERE award_id = ?').bind(a, z, award).run();
+          return J({ ok: true });
+        }
+        if (m === 'DELETE') {
+          if (row) { if (env.VIDEOS) { try { await env.VIDEOS.delete(row.key); } catch (e) {} } await env.DB.prepare('DELETE FROM award_video WHERE award_id = ?').bind(award).run(); }
+          return J({ ok: true });
+        }
+        return J({ error: 'Not found' }, 404);
+      }
 
       if (sub === 'upload' && m === 'POST') {
         const buf = new Uint8Array(await req.arrayBuffer());
@@ -357,6 +431,7 @@ export async function onRequest({ request: req, env, params }) {
             try { await env.DB.prepare(`DELETE FROM ${t} WHERE award_id = ?`).bind(id).run(); } catch (e) {}
           }
           try { await env.DB.prepare('DELETE FROM beats WHERE item = ?').bind(id).run(); } catch (e) {}
+          try { const v = await env.DB.prepare('SELECT key FROM award_video WHERE award_id = ?').bind(id).first(); if (v && env.VIDEOS) await env.VIDEOS.delete(v.key); await env.DB.prepare('DELETE FROM award_video WHERE award_id = ?').bind(id).run(); } catch (e) {}
         }
         return J({ ok: true });
       }

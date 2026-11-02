@@ -26,16 +26,20 @@ const DEFAULT_LINES = {
   joke: [['Every league has a moment nobody forgets.', 'rise'], ['The miss. The slip. The fail that stopped the whole pitch.', 'letters'], ['Laugh. Then vote.', 'slam']],
   people: [['This one is different.', 'rise'], ['No shortlist. No nominees.', 'wipe'], ['Just your voice. Who is the legend of lunchtime?', 'letters']],
 };
-const estDur = (text) => Math.max(2, String(text || '').split(/\s+/).filter(Boolean).length * .42);
+/* how long (ms) each text effect needs before the whole line has finished drawing */
+const fxNeed = (text, fx) => { const t = String(text || ''), words = t.split(/\s+/).filter(Boolean).length, chars = t.replace(/\s/g, '').length; return fx === 'letters' ? chars * 34 + 560 : fx === 'split' ? words * 110 + 700 : fx === 'slam' ? 900 : fx === 'wipe' ? 1000 : fx === 'glow' ? 1300 : 1000; };
+/* a line stays up for at least 2 s, about .42 s per word, and never less than 1.2 s AFTER its animation has finished */
+const estDur = (text, fx) => Math.max(2, String(text || '').split(/\s+/).filter(Boolean).length * .42, fxNeed(text, fx) / 1000 + 1.2);
+const withTimeout = (p, ms) => Promise.race([p, new Promise((r) => setTimeout(r, ms))]);
 function defaultBeats(style) {
-  const lines = DEFAULT_LINES[style] || DEFAULT_LINES.dor, sp = style === 'story' ? 2.4 : 2.7;
-  return lines.map(([text, fx], i) => ({ text, fx, start: +(1 + i * sp).toFixed(2), vstart: null, audio: null, trim_in: 0, trim_out: 0, speed: 1, gain: 1, dur: sp - .25 }));
+  const lines = DEFAULT_LINES[style] || DEFAULT_LINES.dor, sp = style === 'story' ? 2.4 : 2.7; let at = 1;
+  return lines.map(([text, fx]) => { const dur = Math.max(sp - .25, estDur(text, fx)), b = { text, fx, start: +at.toFixed(2), vstart: null, audio: null, trim_in: 0, trim_out: 0, speed: 1, gain: 1, dur }; at += Math.max(sp, dur + .25); return b; });
 }
 const clipSeconds = (len, b) => { const tin = Math.max(0, b.trim_in || 0), tout = b.trim_out > tin ? Math.min(b.trim_out, len) : len, sp = b.speed > 0 ? b.speed : 1; return Math.max(.05, (tout - tin) / sp); };
 function sceneTiming(beats, minLen, lens = {}) {
   let end = 0;
   beats.forEach((b) => {
-    if (b.text) end = Math.max(end, (b.start || 0) + (b.dur || estDur(b.text)));
+    if (b.text) end = Math.max(end, (b.start || 0) + (b.dur || estDur(b.text, b.fx)));
     if (b.audio && lens[b.audio]) end = Math.max(end, (b.vstart == null ? b.start || 0 : b.vstart) + clipSeconds(lens[b.audio], b));
   });
   const R = Math.max(6.5, end + .7), D = Math.max(minLen || 0, R + 5.2);
@@ -67,8 +71,8 @@ function introPhase(root, X, P) {
   beats.forEach((b, i) => {
     const st = (b.start || 0) * 1000;
     if (b.text) {
-      const dur = (b.dur || estDur(b.text)) * 1000, wrap = dm('div', 'tx-line', tx), inner = dm('div', 'tx-in' + (b.fx === 'slam' ? ' gold' : ''), wrap), rule = dm('div', 'tx-rule', wrap);
-      P.window(wrap, st, st + dur + 300, total); P.A(rule, [{ transform: 'scaleX(0)', opacity: .9 }, { transform: 'scaleX(1)', opacity: .9 }], { delay: st + 450, duration: 800 });
+      const nx = beats.slice(i + 1).find((q) => q.text), dur = (b.dur || estDur(b.text, b.fx)) * 1000, ideal = st + dur + 300, minEnd = st + fxNeed(b.text, b.fx) + 650, endAt = Math.max(minEnd, nx ? Math.min(ideal, (nx.start || 0) * 1000) : ideal), wrap = dm('div', 'tx-line', tx), inner = dm('div', 'tx-in' + (b.fx === 'slam' ? ' gold' : ''), wrap), rule = dm('div', 'tx-rule', wrap);
+      P.window(wrap, st, endAt, total); P.A(rule, [{ transform: 'scaleX(0)', opacity: .9 }, { transform: 'scaleX(1)', opacity: .9 }], { delay: st + 450, duration: 800 });
       const fxn = b.fx || 'rise';
       if (fxn === 'letters') { splitLetters(inner, b.text, P, st, 34, true); P.fx(st, 'swish'); }
       else if (fxn === 'split') { inner.textContent = ''; b.text.split(' ').forEach((w, k) => { const s = dm('span', 'wd', inner, w); inner.append(' '); P.A(s, [{ opacity: 0, transform: `translateX(${k % 2 ? 150 : -150}px)`, filter: 'blur(8px)' }, { opacity: 1, transform: 'none', filter: 'blur(0)' }], { delay: st + k * 110, duration: 700 }); }); P.fx(st, 'whoosh'); P.fx(st + 220, 'whoosh'); }
@@ -94,6 +98,11 @@ function introPhase(root, X, P) {
 }
 
 /* ---- phase B: the nominees arrive one by one ---- */
+/* time (ms) one nominee card needs: name typed in, stats counted up, then a readable pause. The next card arrives as this one fades. */
+const NOM_HOLD = 1100, NOM_FADE = 450;
+const nomCardMs = (p) => Math.max(380 + 28 * Math.max(0, [...String(p.name || '')].length - 1) + 360, 2040) + NOM_HOLD;
+const nomPer = (noms) => (Math.max(0, ...(noms || []).map(nomCardMs)) + NOM_FADE) / 1000;
+const nomLen = (noms) => (noms && noms.length ? 1.0 + noms.length * nomPer(noms) + 2.4 + noms.length * .09 : 0);
 function nomPhase(root, X, P) {
   const { cfg } = X, layer = dm('div', 'sc-layer', root), noms = cfg.nominees || [], n = noms.length;
   if (cfg.writein) {
@@ -102,11 +111,11 @@ function nomPhase(root, X, P) {
     const r = dm('div', 'tx-rule', w); P.A(r, [{ transform: 'scaleX(0)' }, { transform: 'scaleX(1)' }], { delay: 900, duration: 800 });
     return 3.8;
   }
-  const per = Math.max(1.15, Math.min(3.2, (12 - 3.3) / Math.max(1, n))), start = 1.0, label = dm('div', 'nm-label', layer, 'The nominees');
+  const per = nomPer(noms), start = 1.0, label = dm('div', 'nm-label', layer, 'The nominees');
   P.A(label, [{ opacity: 0, letterSpacing: '.7em' }, { opacity: 1, letterSpacing: '.45em' }], { delay: 100, duration: 900 });
   const stage = dm('div', 'nm-stage', layer), pips = dm('div', 'nm-pips', layer);
   noms.forEach((p, i) => {
-    const t = (start + i * per) * 1000, ex = (start + (i + 1) * per - .45) * 1000, card = dm('div', 'nm-card', stage), pip = dm('i', '', pips);
+    const t = (start + i * per) * 1000, ex = (start + (i + 1) * per - NOM_FADE / 1000) * 1000, card = dm('div', 'nm-card', stage), pip = dm('i', '', pips);
     const ph = dm('div', 'nm-photo', card); if (p.photo) { const im = dm('img', '', ph); im.src = '/api/photo/' + p.photo; im.alt = ''; } else { ph.innerHTML = '<svg class="ic" viewBox="0 0 100 100"><use href="#i-sil"/></svg>'; }
     const nm = dm('div', 'nm-name', card); [...p.name].forEach((ch, k) => { const s = dm('span', '', nm, ch); P.A(s, [{ opacity: 0, transform: 'translateY(14px)' }, { opacity: 1, transform: 'none' }], { delay: t + 380 + k * 28, duration: 360 }); });
     const pos = dm('div', 'nm-pos', card, p.position || 'Player'); P.A(pos, [{ opacity: 0 }, { opacity: 1 }], { delay: t + 650, duration: 500 });
@@ -126,34 +135,92 @@ function nomPhase(root, X, P) {
   return (endT + 2400 + n * 90) / 1000;
 }
 
+/* ---- phase A (video version): the award's own video, from the saved start point to the saved end point ---- */
+let VEL = null;   // one <video> element is reused for every award, so phones don't ask for a tap each time
+function videoEl() {
+  if (!VEL) { VEL = document.createElement('video'); VEL.className = 'sc-video'; VEL.playsInline = true; VEL.setAttribute('playsinline', ''); VEL.setAttribute('webkit-playsinline', ''); VEL.disablePictureInPicture = true; VEL.preload = 'auto'; VEL.controls = false; }
+  return VEL;
+}
+function videoPhase(root, X, P, onFail) {
+  const V = X.cfg.video, layer = dm('div', 'sc-layer sc-vlayer', root), v = videoEl(), ac = new AbortController(), on = (ev, fn) => v.addEventListener(ev, fn, { signal: ac.signal });
+  let begun = false, over = false, raf = 0, iv = 0, lastT = -1, lastMove = performance.now(), start = Math.max(0, +V.start || 0), end = +V.end || 0;
+  const born = performance.now(); layer.append(v); v.muted = AU.muted; v.volume = 1;
+  const teardown = () => { ac.abort(); cancelAnimationFrame(raf); clearInterval(iv); try { v.pause(); } catch (e) {} v.removeAttribute('src'); try { v.load(); } catch (e) {} };
+  const endOrig = P.end.bind(P);
+  P.end = () => { over = true; teardown(); endOrig(); };                       // the Skip button, a timeout or a normal finish all end up here
+  const fail = () => { if (over) return; over = true; teardown(); P.onDone = null; endOrig(); onFail(); };   // could not play: use the animated School D’Or intro instead
+  const ok = () => { if (!over) P.end(); };
+  const check = () => {
+    if (over) return; const now = performance.now(), ct = v.currentTime;
+    if (!begun) { if (now - born > 10000) fail(); return; }
+    if (ct !== lastT) { lastT = ct; lastMove = now; }
+    if (end > 0 && end - ct < .3) v.volume = Math.max(0, (end - ct) / .3);                 // tiny fade so the cut never clicks
+    if ((end > 0 && ct >= end - .03) || v.ended) ok();
+    else if (!v.paused && now - lastMove > 6000) ok();                                      // frozen mid-video: move on instead of getting stuck
+  };
+  const loop = () => { check(); if (!over) raf = requestAnimationFrame(loop); };
+  on('error', fail); on('ended', ok); on('playing', () => { begun = true; lastMove = performance.now(); });
+  on('loadedmetadata', () => {
+    const d = v.duration; if (!isFinite(d) || d <= 0) { fail(); return; }
+    start = Math.min(start, Math.max(0, d - .5)); end = end > start + .2 ? Math.min(end, d) : d;
+    try { v.currentTime = start; } catch (e) {}
+    const pr = v.play();
+    if (pr && pr.catch) pr.catch((err) => {
+      if (over || (err && err.name === 'AbortError')) return;
+      if (err && err.name === 'NotAllowedError' && !v.muted) {                                  // the browser blocked sound: play silently and offer a tap
+        v.muted = true; const b = dm('button', 'sc-btn sc-sound', layer, '🔇 Tap for sound'); b.onclick = () => { v.muted = false; b.remove(); };
+        const p2 = v.play(); if (p2 && p2.catch) p2.catch(() => { if (!over) fail(); });
+      } else fail();
+    });
+  });
+  v.src = V.url;
+  raf = requestAnimationFrame(loop); iv = setInterval(check, 250);
+  P.later(((end > start ? end - start : (+V.duration || 120)) + 20) * 1000, ok);                                  // hard stop, whatever happens
+  return layer;
+}
+
 function runScene(cfg) {
   return new Promise(async (resolve) => {
     const c = AU.init(), root = dm('div'); root.id = 'scene'; document.body.append(root);
     const beats = (cfg.beats || []).map((b) => ({ ...b })), bufs = {}, lens = {}; let mbuf = null;
-    if (c) await Promise.all([...[...new Set(beats.map((b) => b.audio).filter(Boolean))].map(async (id) => { const bf = await AU.buf(id); if (bf) { bufs[id] = bf; lens[id] = bf.duration; } }), (async () => { mbuf = await AU.buf(cfg.music); })()]);
+    const useVid = !!(cfg.video && cfg.video.url);
+    if (c && !useVid) await withTimeout(Promise.all([...[...new Set(beats.map((b) => b.audio).filter(Boolean))].map(async (id) => { const bf = await AU.buf(id); if (bf) { bufs[id] = bf; lens[id] = bf.duration; } }), (async () => { mbuf = await AU.buf(cfg.music); })()]), 8000);
     const T = sceneTiming(beats, cfg.minLen, lens), X = { beats, T, bufs, cfg };
     dm('div', 'sc-bg', root); dm('div', 'sc-bar top', root); dm('div', 'sc-bar bot', root);
     const parts = dm('div', 'sc-parts', root); for (let i = 0; i < 22; i++) { const p = dm('i', '', parts); p.style.cssText = `left:${rnd(2, 98)}%;--dx:${rnd(-60, 60)}px;animation-duration:${rnd(5, 10)}s;animation-delay:${rnd(0, 4)}s`; }
     const ctl = dm('div', 'sc-ctl', root), mute = dm('button', 'sc-btn', ctl, AU.muted ? '🔇' : '🔊'), skip = dm('button', 'sc-btn', ctl, 'Skip');
     mute.setAttribute('aria-label', 'Sound on or off'); skip.setAttribute('aria-label', 'Skip');
     let music = null, cur = null, finished = false; const t0 = c ? AU.now() + .25 : 0, hasNom = !cfg.skipNominees && ((cfg.nominees || []).length > 0 || cfg.writein);
-    const nomEst = hasNom ? (cfg.writein ? 3.8 : 12.5) : 0;
-    if (c) music = mbuf ? AU.track(mbuf, t0) : AU.score(t0, T.D + nomEst + 3, T.R, hasNom ? T.D : null);
+    const nomEst = hasNom ? (cfg.writein ? 3.8 : nomLen(cfg.nominees)) : 0;
+    const startMusic = (tt) => { if (c && !music) music = mbuf ? AU.track(mbuf, tt) : AU.score(tt, T.D + nomEst + 3, T.R, hasNom ? T.D : null); };   // a video brings its own sound, so no built-in music with it
+    if (!useVid) startMusic(t0);
     const finish = () => { if (finished) return; finished = true; if (cur) cur.end(); if (c) AU.fade(music, AU.now() + .05, 1.2); root.classList.remove('on'); setTimeout(() => { root.remove(); resolve(); }, 700); };
     skip.onclick = () => { if (cur) cur.end(); };
-    mute.onclick = () => { AU.setMuted(!AU.muted); mute.textContent = AU.muted ? '🔇' : '🔊'; };
+    mute.onclick = () => { AU.setMuted(!AU.muted); mute.textContent = AU.muted ? '🔇' : '🔊'; if (VEL) VEL.muted = AU.muted; };
     const runB = () => {
       if (finished) return; if (!hasNom) { finish(); return; }
       const P = makePhase(c); cur = P; window.__scene = { phase: 'B', skip: () => P.end() };
       const len = nomPhase(root, X, P); P.start(c ? AU.now() + .1 : 0); P.later(len * 1000, () => P.end()); P.onDone = () => { root.querySelectorAll('.sc-layer').forEach((l) => l.remove()); finish(); };
     };
-    const P = makePhase(c); cur = P; window.__scene = { phase: 'A', skip: () => P.end() };
-    introPhase(root, X, P);
-    beats.forEach((b) => { const vs = b.vstart == null ? b.start || 0 : b.vstart;
-      if (c && b.audio && bufs[b.audio]) { const s = AU.playClip(bufs[b.audio], P.vbus, t0 + vs, b), L = AU.clipLen(bufs[b.audio], b); AU.duck(t0 + vs - .1, t0 + vs + L + .3); }
-      else if (c && b.text && cfg.tts) P.later(vs * 1000, () => AU.speak(b.text)); });
-    P.start(t0); P.later(T.D * 1000, () => P.end());
-    P.onDone = () => { root.querySelectorAll('.sc-layer').forEach((l) => l.remove()); runB(); };
+    const runA = (tt) => {
+      const P = makePhase(c); cur = P; window.__scene = { phase: 'A', skip: () => P.end() };
+      introPhase(root, X, P);
+      beats.forEach((b) => { const vs = b.vstart == null ? b.start || 0 : b.vstart;
+        if (c && b.audio && bufs[b.audio]) { const s = AU.playClip(bufs[b.audio], P.vbus, tt + vs, b), L = AU.clipLen(bufs[b.audio], b); AU.duck(tt + vs - .1, tt + vs + L + .3); }
+        else if (c && b.text && cfg.tts) P.later(vs * 1000, () => AU.speak(b.text)); });
+      P.start(tt); P.later(T.D * 1000, () => P.end());
+      P.onDone = () => { root.querySelectorAll('.sc-layer').forEach((l) => l.remove()); runB(); };
+    };
+    if (useVid) {
+      const P = makePhase(c); cur = P; window.__scene = { phase: 'A', video: true, skip: () => P.end() };
+      P.onDone = () => { root.querySelectorAll('.sc-layer').forEach((l) => l.remove()); runB(); };
+      videoPhase(root, X, P, async () => {                                   // video unavailable: fall back to the animated School D’Or intro
+        root.querySelectorAll('.sc-layer').forEach((l) => l.remove());
+        if (c && !mbuf) mbuf = await withTimeout(AU.buf(cfg.music), 4000);
+        if (finished) return;
+        const tt = c ? AU.now() + .25 : 0; startMusic(tt); runA(tt);
+      });
+    } else runA(t0);
     requestAnimationFrame(() => root.classList.add('on'));
   });
 }

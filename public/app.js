@@ -6,7 +6,7 @@ const $ = (s) => document.getElementById(s);
 const ADMIN_ROUTE = location.pathname.replace(/\/+$/, '') === '/admin';
 let admin = false, cur = ADMIN_ROUTE ? 'admin' : 'home', q = '', fresh = true, mine = {}, mineW = {}, last = '', ready = false, failed = false, pending = {}, okMsg = {}, editing = {}, wiDraft = {}, sceneOn = false;
 let cer = { mode: 'land', i: 0 };
-const S = { players: [], awards: [], beats: [], set: { revealed: false, deadline: 0, codeRequired: false, tts: false }, tally: {}, voters: 0, writeins: {}, winnerW: {}, special: { intro: null, outro: null } };
+const S = { players: [], awards: [], beats: [], videos: {}, storage: { video: false }, set: { revealed: false, deadline: 0, codeRequired: false, tts: false }, tally: {}, voters: 0, writeins: {}, winnerW: {}, special: { intro: null, outro: null } };
 const locked = () => S.set.revealed || (S.set.deadline && Date.now() > S.set.deadline);
 function toast(t) { const e = $('toast'); e.textContent = t; e.classList.add('on'); clearTimeout(toast.t); toast.t = setTimeout(() => e.classList.remove('on'), 2800); }
 for (let i = 0; i < 10; i++) { const s = document.createElement('i'); s.className = 'spark'; s.style.cssText = 'left:' + Math.random() * 100 + '%;animation-duration:' + (9 + Math.random() * 9) + 's;animation-delay:' + Math.random() * 8 + 's'; document.body.append(s); }
@@ -38,12 +38,14 @@ const meta = (a) => (a && a.meta) || {};
 const kindOf = (a) => (meta(a).kind === 'writein' ? 'writein' : 'pick');
 const styleOf = (a) => sceneStyleFor(a.title, meta(a).style);
 /* ---- ceremony content: every item (opening, awards, thank-you) is a list of "beats" (a line of text + optional voice clip) ---- */
-const normB = (b) => ({ ...b, start: +b.start || 0, vstart: b.vstart == null ? null : +b.vstart, trim_in: +b.trim_in || 0, trim_out: +b.trim_out || 0, speed: +b.speed || 1, gain: +b.gain || 1, dur: estDur(b.text) });
+const normB = (b) => ({ ...b, start: +b.start || 0, vstart: b.vstart == null ? null : +b.vstart, trim_in: +b.trim_in || 0, trim_out: +b.trim_out || 0, speed: +b.speed || 1, gain: +b.gain || 1, dur: estDur(b.text, b.fx) });
 const beatsOf = (item) => S.beats.filter((b) => b.item === item).map(normB).sort((x, y) => x.start - y.start);
 function defaultStyleFor(item) { if (item === '_intro') return 'story'; if (item === '_outro') return 'outro'; const a = S.awards.find((x) => x.id === item); return a ? styleOf(a) : 'dor'; }
 const beatsFor = (item) => { const s = beatsOf(item); return s.length ? s : defaultBeats(defaultStyleFor(item)); };
 const itemMeta = (item) => (item === '_intro' ? S.special.intro : item === '_outro' ? S.special.outro : (S.awards.find((x) => x.id === item) || {}).meta) || {};
-const awardCfg = (a) => ({ title: a.title, icon: a.icon, image: a.photo ? '/api/photo/' + a.photo : null, music: meta(a).music, beats: beatsFor(a.id), nominees: kindOf(a) === 'writein' ? [] : (a.nominees || []).map(playerById).filter(Boolean), writein: kindOf(a) === 'writein', tts: S.set.tts });
+/* the award's own intro video (if it has one): where to stream it and which part to play */
+const videoFor = (id) => { const v = (S.videos || {})[id]; return v && v.key ? { url: '/api/' + v.key.replace(/^videos\//, 'video/'), start: +v.trim_start || 0, end: +v.trim_end || 0, duration: +v.duration || 0 } : null; };
+const awardCfg = (a) => ({ video: videoFor(a.id), title: a.title, icon: a.icon, image: a.photo ? '/api/photo/' + a.photo : null, music: meta(a).music, beats: beatsFor(a.id), nominees: kindOf(a) === 'writein' ? [] : (a.nominees || []).map(playerById).filter(Boolean), writein: kindOf(a) === 'writein', tts: S.set.tts });
 const introCfg = () => ({ title: 'School D’Or', icon: 'trophy', image: '/ball.jpg', sub: 'Where Lunchtime Legends Are Made', music: itemMeta('_intro').music, beats: beatsFor('_intro'), skipNominees: true, tts: S.set.tts });
 const outroCfg = () => ({ title: 'Thank You', icon: 'crown', sub: 'Your votes are in', music: itemMeta('_outro').music, beats: beatsFor('_outro'), skipNominees: true, tts: S.set.tts });
 async function playScene(cfg) { if (matchMedia('(prefers-reduced-motion: reduce)').matches) return; sceneOn = true; try { await runScene(cfg); } catch (e) { console.error(e); } sceneOn = false; }
@@ -200,6 +202,7 @@ function creditsText() {
 }
 function render(force) {
   const a = document.activeElement;
+  if (!force && cur === 'admin') { const pv = document.querySelector('.vbox video'); if (pv && !pv.paused && !pv.ended) return; }
   if (!force && a && ['INPUT', 'SELECT', 'TEXTAREA'].includes(a.tagName) && ((cur === 'admin' && admin && a.closest('.ad')) || a.classList.contains('wi-in'))) return;
   document.body.classList.toggle('cer', cur === 'voting' && ['scene', 'vote', 'lock', 'edit'].includes(cer.mode));
   const names = [['home', 'Home'], ['players', 'Players'], ['awards', 'Awards'], ['voting', 'Voting'], ...(admin ? [['admin', 'Admin']] : [])];

@@ -46,10 +46,98 @@ function tabCeremony() {
   return h('div', {}, ...head('Ceremony', 'This is the order voters see. The School D’Or story always plays first, then each award from the top of the list down. Put the biggest award last.'),
     h('div', { class: 'btns' }, h('button', { class: 'btn', onclick: previewAll }, '▶ Preview the whole ceremony')),
     ...its.map((it, idx) => { const v = voiceStat(it.id), m = itemMeta(it.id), a = it.a, ai = idx - 1;
-      const info = [a ? (kindOf(a) === 'writein' ? 'Typed names' : (a.nominees || []).length + ' nominees') : null, v.total ? '🎙 ' + v.rec + '/' + v.total + ' lines recorded' : 'default text, no voice yet', m.music ? '🎵 own music' : null].filter(Boolean).join(' · ');
+      const info = [a ? (kindOf(a) === 'writein' ? 'Typed names' : (a.nominees || []).length + ' nominees') : null, v.total ? '🎙 ' + v.rec + '/' + v.total + ' lines recorded' : 'default text, no voice yet', m.music ? '🎵 own music' : null, a && (S.videos || {})[a.id] ? '🎬 has a video' : null].filter(Boolean).join(' · ');
       return h('div', { class: 'acard' }, h('div', { class: 'arow' }, h('b', { class: 'gt', style: 'min-width:1.6rem' }, idx === 0 ? '▶' : idx === its.length - 1 ? '■' : String(idx)), h('div', { style: 'flex:1' }, h('div', { style: 'font-weight:600' }, it.title), h('div', { class: 'mut' }, info))),
         h('div', { class: 'btns' }, h('button', { class: 'btn sm out', onclick: () => playScene(cfgFor(it)) }, '▶ Preview'), h('button', { class: 'btn sm out', onclick: () => { studioItem = it.id; adminTab = 'studio'; render(true); scrollTo({ top: 0 }); } }, '✎ Text & voice'),
           a ? h('button', { class: 'btn sm out', 'aria-label': 'Move up', onclick: () => move(ai, -1) }, '▲') : '', a ? h('button', { class: 'btn sm out', 'aria-label': 'Move down', onclick: () => move(ai, 1) }, '▼') : '')); }));
+}
+/* ---- award intro video: upload, preview, trim. The file lives in R2; only the start/end times are saved (nothing is re-encoded). ---- */
+const VID_MAX = 95000000, VID_TYPES = { mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime' };
+const vtrim = {}, vup = {}, vmsg = {}, vupEl = {};   // per award: unsaved trim edits, upload in progress, last message, progress bar
+const fmtT = (x) => { x = Math.max(0, +x || 0); const m = Math.floor(x / 60); return m + ':' + (x - m * 60).toFixed(1).padStart(4, '0'); };
+const mbOf = (n) => (n / 1048576).toFixed(1) + ' MB';
+const vurl = (v) => '/api/' + v.key.replace(/^videos\//, 'video/');
+const vsay = (id, text, bad) => { vmsg[id] = text ? { text, bad: !!bad } : null; render(true); };
+function probeVideo(file) {
+  return new Promise((ok, no) => {
+    const u = URL.createObjectURL(file), v = document.createElement('video');
+    const done = (f, x) => { clearTimeout(t); v.removeAttribute('src'); try { v.load(); } catch (e) {} URL.revokeObjectURL(u); f(x); }, t = setTimeout(() => done(no, new Error('timeout')), 10000);
+    v.preload = 'metadata'; v.muted = true; v.onloadedmetadata = () => (isFinite(v.duration) && v.duration > 0 ? done(ok, v.duration) : done(no, new Error('no duration'))); v.onerror = () => done(no, new Error('unreadable')); v.src = u;
+  });
+}
+function xhrUpload(url, file, type, onProg) {
+  return new Promise((ok, no) => {
+    const x = new XMLHttpRequest(); x.open('POST', url); x.setRequestHeader('X-Admin-Key', akey); x.setRequestHeader('Content-Type', type);
+    x.upload.onprogress = (e) => { if (e.lengthComputable) onProg(e.loaded / e.total); };
+    x.onload = () => { let d = {}; try { d = JSON.parse(x.responseText); } catch (e) {} if (x.status >= 200 && x.status < 300) ok(d); else no(new Error(d.error || (x.status === 413 ? 'That video is too big. Export it smaller and try again.' : x.status === 401 ? 'Please log in again.' : 'Upload failed (' + x.status + ').'))); };
+    x.onerror = () => no(new Error('The upload was interrupted. Check the connection and try again.')); x.ontimeout = () => no(new Error('The upload took too long. Try again on a faster connection.')); x.timeout = 600000;
+    x.send(file);
+  });
+}
+async function uploadVideo(a, file) {
+  const have = (S.videos || {})[a.id], ext = (file.name.split('.').pop() || '').toLowerCase(), type = VID_TYPES[ext] || (/^video\/(mp4|webm|quicktime)$/.test(file.type) ? file.type : '');
+  if (!type) return vsay(a.id, 'That file type isn’t supported. Use MP4, WebM or MOV.', true);
+  if (file.size < 1000) return vsay(a.id, 'That file looks empty.', true);
+  if (file.size > VID_MAX) return vsay(a.id, 'That video is ' + mbOf(file.size) + '. The limit is 95 MB. Export it smaller (a 1080p or 720p MP4 works well).', true);
+  let dur; try { dur = await probeVideo(file); } catch (e) { return vsay(a.id, 'This browser can’t read that video (its format or codec isn’t supported here). Export it as MP4 with H.264 video and AAC audio, then try again.', true); }
+  if (dur > 60 && !confirm('This video is ' + fmtT(dur) + ' long. Award intros are usually 15 to 20 seconds. Upload it anyway? (You can trim it afterwards.)')) return;
+  if (have && !confirm('Replace the current video for “' + a.title + '”? The old video will be deleted.')) return;
+  vup[a.id] = { pct: 0, name: file.name }; vsay(a.id, '');
+  try {
+    await xhrUpload('/api/admin/video/' + a.id + '?name=' + encodeURIComponent(file.name) + '&duration=' + dur.toFixed(2), file, type, (f) => { vup[a.id].pct = Math.round(f * 100); const e = vupEl[a.id]; if (e && e.bar.isConnected) { e.bar.value = vup[a.id].pct; e.txt.textContent = 'Uploading ' + vup[a.id].pct + '%'; } });
+    delete vup[a.id]; delete vtrim[a.id]; toast('Video saved 🎬'); await load(); render(true);
+  } catch (e) { delete vup[a.id]; vsay(a.id, e.message || 'Upload failed.', true); }
+}
+async function removeVideo(a) {
+  if (!confirm('Remove the video from “' + a.title + '”? This award will use the built-in animated intro again.')) return;
+  try { await api('admin/video/' + a.id, { method: 'DELETE' }); delete vtrim[a.id]; vsay(a.id, ''); toast('Video removed'); load(); } catch (e) { vsay(a.id, 'Couldn’t remove the video.', true); }
+}
+async function saveTrim(a, start, end) {
+  try { await api('admin/video/' + a.id, jp('PUT', { trim_start: start, trim_end: end })); toast('Trim saved ✂️'); vsay(a.id, ''); await load(); return true; } catch (e) { vsay(a.id, e.message || 'Couldn’t save the trim.', true); return false; }
+}
+function playRange(vid, s, e) {                       // plays only the chosen part, with sound, and stops exactly at the end point
+  cancelAnimationFrame(vid._raf); vid.muted = false; try { vid.currentTime = s; } catch (x) {}
+  const pr = vid.play(); if (pr && pr.catch) pr.catch(() => toast('Press play on the video to hear it (your browser needs a tap first).'));
+  const watch = () => { if (vid.paused) return; if (vid.currentTime >= e - .03) { vid.pause(); try { vid.currentTime = e; } catch (x) {} return; } vid._raf = requestAnimationFrame(watch); };
+  vid._raf = requestAnimationFrame(watch);
+}
+function videoBox(a) {
+  const v = (S.videos || {})[a.id], box = h('div', { class: 'sub-card vbox' }), m = vmsg[a.id], up = vup[a.id];
+  box.append(h('b', {}, '🎬 Intro video for “' + a.title + '”'));
+  const note = () => { if (m) box.append(h('div', { class: 'vmsg' + (m.bad ? ' bad' : '') }, m.text)); };
+  if (!(S.storage && S.storage.video)) { box.append(h('p', { class: 'mut' }, 'Video storage isn’t set up yet. Create an R2 bucket, bind it to this project as VIDEOS, run migration-v4.sql and redeploy (README, “Award videos”). Until then every award uses the built-in animated intro.')); return box; }
+  const pickBtn = (label) => h('button', { class: 'btn sm out', onclick: () => pickFile('video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov', (f) => uploadVideo(a, f)) }, label);
+  if (up) { const bar = h('progress', { max: 100, value: up.pct }), txt = h('span', { class: 'mut' }, 'Uploading ' + up.pct + '%'); vupEl[a.id] = { bar, txt }; box.append(h('div', { class: 'btns' }, bar, txt), h('div', { class: 'mut' }, up.name + ' · keep this page open until it finishes')); note(); return box; }
+  if (!v) { box.append(h('p', { class: 'mut' }, 'No video yet: this award uses the built-in animated intro. Upload an MP4 (H.264), WebM or MOV up to 95 MB. About 15 to 20 seconds works best.'), h('div', { class: 'btns' }, pickBtn('⬆ Upload video'))); note(); return box; }
+  const dur0 = +v.duration || 0, saved = { start: +v.trim_start || 0, end: +v.trim_end || 0 }, d = vtrim[a.id] || { start: saved.start, end: saved.end || dur0, open: false }; vtrim[a.id] = d;
+  const vid = h('video', { src: vurl(v), controls: '', playsinline: '', preload: 'metadata', 'aria-label': 'Video preview for ' + a.title });
+  const info = h('div', { class: 'mut' }), upInfo = () => { info.textContent = (v.name || 'video') + ' · ' + mbOf(v.size || 0) + ' · ' + fmtT(dur0) + ' long · ' + (saved.end > 0 ? 'plays ' + fmtT(saved.start) + ' → ' + fmtT(saved.end) + ' (' + (saved.end - saved.start).toFixed(1) + ' s)' : 'plays the whole video'); }; upInfo();
+  const full = () => { const D = isFinite(vid.duration) && vid.duration > 0 ? vid.duration : dur0; return D; };
+  const panel = h('div', { class: 'vtrim' });
+  const draw = () => {
+    if (!d.open) { panel.replaceChildren(); return; }
+    const D = full(), lbl = h('div', {}), msg = h('div', { class: 'mut' });
+    const rs = h('input', { type: 'range', min: 0, max: D || 1, step: .05, value: d.start, 'aria-label': 'Start point' }), re = h('input', { type: 'range', min: 0, max: D || 1, step: .05, value: d.end, 'aria-label': 'End point' });
+    const ns = h('input', { type: 'number', step: .1, min: 0, 'aria-label': 'Start in seconds' }), ne = h('input', { type: 'number', step: .1, min: 0, 'aria-label': 'End in seconds' });
+    const saveB = h('button', { class: 'btn sm' }, '💾 Save trim');
+    const problem = () => { if (!(d.start >= 0)) return 'The start can’t be negative.'; if (!(d.end > d.start)) return 'The end must come after the start.'; if (d.end - d.start < .5) return 'Keep at least half a second of video.'; if (D > 0 && d.end > D + .25) return 'The end is past the end of the video (' + fmtT(D) + ').'; return ''; };
+    const dirty = () => Math.abs(d.start - saved.start) > .001 || Math.abs((d.end || 0) - (saved.end || D)) > .001;
+    const sync = () => { rs.value = d.start; re.value = d.end; if (document.activeElement !== ns) ns.value = (+d.start).toFixed(2); if (document.activeElement !== ne) ne.value = (+d.end).toFixed(2); const pr = problem(); lbl.textContent = 'Plays ' + fmtT(d.start) + ' → ' + fmtT(d.end) + (pr ? '' : ' (' + (d.end - d.start).toFixed(1) + ' s)'); saveB.disabled = !!pr || !dirty(); msg.textContent = pr || (dirty() ? 'Unsaved changes: press Save trim.' : 'Saved.'); msg.className = pr ? 'vmsg bad' : 'mut'; };
+    const seek = (t) => { vid.pause(); try { vid.currentTime = Math.max(0, Math.min(t, D || t)); } catch (e) {} };
+    rs.oninput = () => { d.start = +rs.value; sync(); seek(d.start); }; re.oninput = () => { d.end = +re.value; sync(); seek(d.end - .05); };
+    ns.onchange = () => { d.start = +ns.value; sync(); seek(d.start); }; ne.onchange = () => { d.end = +ne.value; sync(); seek(d.end - .05); };
+    saveB.onclick = async () => { if (problem()) return; await saveTrim(a, +d.start.toFixed(2), +d.end.toFixed(2)); };
+    panel.replaceChildren(
+      h('div', { class: 'fg' }, fld('Start (seconds)', ns), fld('End (seconds)', ne)), h('label', { class: 'fld' }, h('span', {}, 'Drag to choose the start'), rs), h('label', { class: 'fld' }, h('span', {}, 'Drag to choose the end'), re), lbl,
+      h('div', { class: 'btns' }, h('button', { class: 'btn sm out', onclick: () => { d.start = +vid.currentTime.toFixed(2); sync(); } }, 'Start = current frame'), h('button', { class: 'btn sm out', onclick: () => { d.end = +vid.currentTime.toFixed(2); sync(); } }, 'End = current frame'), h('button', { class: 'btn sm out', onclick: () => { d.start = 0; d.end = D; sync(); } }, 'Whole video')),
+      h('div', { class: 'btns' }, h('button', { class: 'btn sm out', onclick: () => { if (problem()) { toast(problem()); return; } playRange(vid, d.start, d.end); } }, '▶ Preview this part'), saveB), msg);
+    sync();
+  };
+  vid.addEventListener('loadedmetadata', () => { if (d.open && isFinite(vid.duration) && (!d.end || d.end > vid.duration + .25)) { d.end = vid.duration; } if (d.open) draw(); });
+  vid.addEventListener('error', () => { vsay(a.id, 'This browser can’t play that video. Re-export it as MP4 (H.264 + AAC) and replace it.', true); });
+  box.append(h('div', { class: 'mut' }, 'Belongs to: ' + a.title), info, vid,
+    h('div', { class: 'btns' }, h('button', { class: 'btn sm out', onclick: () => { const e = saved.end > 0 ? saved.end : (full() || dur0); playRange(vid, saved.start, e); } }, '▶ Play the saved part'), h('button', { class: 'btn sm out', onclick: () => { d.open = !d.open; draw(); } }, '✂ Trim video'), pickBtn('⇄ Replace'), h('button', { class: 'btn sm danger', onclick: () => removeVideo(a) }, '🗑 Remove')), panel);
+  draw(); note(); return box;
 }
 function tabAwards() {
   const an = h('input', { placeholder: 'New award name, e.g. Best Goalkeeper' }), as = sel(ICON_OPTS, 'trophy', () => {}), ak = sel([['pick', 'Pick from nominees'], ['writein', 'Write-in (people type a name)']], 'pick', () => {});
@@ -58,6 +146,7 @@ function tabAwards() {
       return h('div', { class: 'acard' }, h('div', { class: 'arow' }, h('span', { class: 'mut' }, '#' + (i + 1)), thumb(a), inp(a.title, (v) => upd('awards', a.id, { title: v }))),
         h('div', { class: 'fg' }, fld('Icon', sel(ICON_OPTS, a.icon || 'trophy', (v) => upd('awards', a.id, { icon: v }))), fld('Type', sel([['pick', 'Pick from nominees'], ['writein', 'Write-in (type a name)']], kindOf(a), (v) => metaSet(a.id, { kind: v }))), fld('Animation text style', sel([['auto', 'Auto (from the award name)'], ['dor', 'Player of the year'], ['puskas', 'Goal of the year'], ['glove', 'Goalkeeper'], ['maestro', 'Playmaker'], ['rising', 'Rising star'], ['joke', 'Joke award'], ['people', 'People’s choice']], meta(a).style || 'auto', (v) => metaSet(a.id, { style: v })))),
         h('div', { class: 'btns' }, h('button', { class: 'btn sm out', onclick: () => pick('awards', a.id) }, '🖼 Award picture'), h('button', { class: 'btn sm out', onclick: () => { studioItem = a.id; adminTab = 'studio'; render(true); } }, '✎ Text & voice'), h('button', { class: 'btn sm danger', onclick: () => resetAward(a) }, 'Reset votes'), h('button', { class: 'btn sm danger', onclick: () => confirm('Delete this award?') && del('awards', a.id) }, 'Delete')),
+        videoBox(a),
         wi ? h('div', { class: 'mut' }, 'Write-in award: there are no nominees. Voters type a name, and you see the smart counts in the Voting tab.') : h('div', {}, h('div', { class: 'mut' }, 'Nominees (tap to add or remove)'), h('div', { class: 'btns', style: 'margin-top:.4rem' }, ...S.players.map((p) => { const on = (a.nominees || []).includes(p.id); return h('button', { class: 'sel' + (on ? ' on' : ''), onclick: () => upd('awards', a.id, { nominees: on ? a.nominees.filter((x) => x !== p.id) : [...(a.nominees || []), p.id] }) }, p.name); }))));
     }),
     h('div', { class: 'acard' }, h('b', {}, 'Add an award'), an, h('div', { class: 'fg' }, fld('Icon', as), fld('Type', ak)), h('div', {}, h('button', { class: 'btn sm', onclick: async () => { if (!an.value.trim()) { toast('Name the award'); return; } const r = await add('awards', { title: an.value.trim(), icon: as.value, nominees: [] }); if (r && ak.value === 'writein') await metaSet(r.id, { kind: 'writein', style: 'people' }); an.value = ''; } }, 'Add award'))));
